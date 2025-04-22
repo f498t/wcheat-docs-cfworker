@@ -12,6 +12,7 @@
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.7.5",
 		"@cloudflare/workers-types": "^4.20250406.0",
+		"@types/node": "^22.14.0",
 		"prisma": "^6.6.0",
 		"typescript": "^5.5.2",
 		"vitest": "~3.0.7",
@@ -19,6 +20,7 @@
 	},
 	"dependencies": {
 		"@prisma/adapter-d1": "^6.6.0",
-		"@prisma/client": "^6.6.0"
+		"@prisma/client": "^6.6.0",
+		"dotenv": "^16.4.7"
 	}
 }

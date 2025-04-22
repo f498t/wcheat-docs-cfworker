@@ -1,11 +1,11 @@
-import {Env} from "./ienv"
-export const login = async (uuid:string, env: Env) => {
+import { PrismaClient } from '@prisma/client'
+export const login = async (uuid:string, prisma: PrismaClient) => {
     if (uuid && uuid.length > 0){
-        const result = await env.DB.prepare(
-            "SELECT * FROM users WHERE uuid = ? LIMIT 1",
-        )
-        .bind(uuid)
-        .first();
+        const result = await prisma.users.findFirst({
+            where:{
+                uuid:uuid
+            }
+        })
         return result
     }
     return null

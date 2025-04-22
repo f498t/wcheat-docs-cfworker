@@ -1,164 +1,237 @@
-import {Env} from "./ienv"
+import { Prisma,PrismaClient } from '@prisma/client'
 
 class Result{
     data:any = null
     error:string = ''
 }
-
+const AccountStatus={
+    NOT_LOGGED:  0,
+    LOGGED: 1,
+    LOGGING: 2,
+    DISABLED: 3,
+    TRIAL_EXPIRED: 4,
+    UNABLE_CONNECT: 5,
+    PASSWORD_EXPIRED: 6,
+    APPCODE_ERROR: 7
+}
+const EnableStatus={
+    NOT_ENABLE:0,
+    PAUSE:1,
+    DR:2,
+    SQB:3,
+    UNLOCK_TRANSFERMARKET:4
+}
 const get_updated_at = () => {
     return (new Date()).toISOString().replace("T", " ").replace(/\.\d{3}Z/,'');
 }
 
-// class Account{
-//     id:any=undefined
-//     uuid:string = ''
-//     email:string = ''
-//     password:string = ''
-//     appcode:string = ''
-//     status:any = undefined
-//     enable_status:any = undefined
-//     access_token:string = ''
-//     coins:any = undefined
-//     dr_level:any = undefined
-//     stage_id:any = undefined
-//     champions_points:any = undefined
-//     transformarket_unlocked:boolean|undefined = undefined
-//     record:string = ''
-//     updated_at:Date|undefined = undefined
-// }
-
-const getAccountList = async(uuid:string, searchParams:URLSearchParams, env:Env)=>{
+const getAccountList = async(uuid:string, searchParams:URLSearchParams, prisma: PrismaClient)=>{
     const res = new Result()
-    // 查询条件
-    let sql_where:string = " WHERE uuid='"+uuid+"'"
-    const status:string[] = []
-    const enable_status:string[] = []
-    const dr_level:string[] = []
-    const transformarket_unlocked:string[] = []
-    let prop:string = ''
-    let order:string = ''
-    searchParams.forEach((value,key)=>{
-        if(value === ""){
-            return
-        }
-        if (key === "email"){
-            sql_where += " AND email LIKE '%" + value + "%'"
-        }else if(key === "record"){
-            sql_where += " AND record LIKE '%" + value + "%'"
-        }else if(key.startsWith("status")){
-            status.push(value)
-        }else if(key.startsWith("enableStatus")){
-            enable_status.push(value)
-        }else if(key.startsWith("drLevel")){
-            dr_level.push(value)
-        }else if(key.startsWith("transformarketUnlocked")){
-            transformarket_unlocked.push(value)
-        }else if(key === "prop"){
-            prop = value
-        }else if(key === "order"){
-            order = value
-        }
-    })
-    if (status.length > 0){
-        sql_where += " AND status IN (" + status.join(",") + ")"
-    }
-    if (enable_status.length > 0){
-        sql_where += " AND enable_status IN (" + enable_status.join(",") + ")"
-    }
-    if (dr_level.length > 0){
-        sql_where += " AND dr_level IN (" + dr_level.join(",") + ")"
-    }
-    if (transformarket_unlocked.length > 0){
-        sql_where += " AND transformarket_unlocked IN (" + transformarket_unlocked.join(",") + ")"
-    }
-    // 查询计数
-    const total_result = await env.DB.prepare("SELECT count(*) as total FROM accounts" + sql_where).first()
-    if (!total_result || !("total" in total_result)){
-        res.error = "没有结果"
-        return res
-    }
-    // 查询排序
-    if (prop.length > 0){
-        sql_where += " ORDER BY " + prop
-        if (order === "descending"){
-            sql_where += " DESC"
-        }
-    }
-    // 查询分页
+    //分页信息
     const pageSize = searchParams.get("pageSize")
     const page = searchParams.get("page")
     const limit = pageSize? parseInt(pageSize):0 
-    if (limit){
-        const offset = page? limit * (parseInt(page) - 1) : 0
-        sql_where += " LIMIT " + limit + " OFFSET " + offset 
+    const offset = page? limit * (parseInt(page) - 1) : 0
+    //查询条件
+    const where :Prisma.AccountsWhereInput = {uuid:uuid}
+    const email = searchParams.get("email")
+    if (email){
+        where.email = {
+            contains:email
+        }
     }
-    // 查询结果
-    const list = await env.DB.prepare("SELECT * FROM accounts" + sql_where).all()
-    if (list.success){
+    const record = searchParams.get("record")
+    if (record){
+        where.record={contains:record}
+    }
+    const status = searchParams.get("status")?.split(",").filter(element=>!isNaN(parseInt(element))).map(element=>parseInt(element))??[]
+    if(status.length > 0){
+        where.status={in:status}
+    }
+    const enable_status = searchParams.get("enable_status")?.split(",").filter(element=>!isNaN(parseInt(element))).map(element=>parseInt(element))??[]
+    if(enable_status.length > 0){
+        where.enable_status={in:enable_status}
+    }
+    const dr_level = searchParams.get("dr_level")?.split(",").filter(element=>!isNaN(parseInt(element))).map(element=>parseInt(element))??[]
+    if(dr_level.length > 0){
+        where.dr_level={in:dr_level}
+    }
+    const transformarket_unlockeds: (Prisma.AccountsWhereInput)[] = []
+    searchParams.get("transformarket_unlocked")?.split(",").forEach(element=>{
+        if (element === "true"){
+            transformarket_unlockeds.push({transformarket_unlocked:true})
+        }
+        if (element === "false"){
+            transformarket_unlockeds.push(...[{transformarket_unlocked:false},{transformarket_unlocked:null}])
+        }
+    })
+    if (transformarket_unlockeds.length > 0){
+        where.AND={
+            OR:transformarket_unlockeds
+        }
+    }
+    // 排序
+    let orderBy:Prisma.AccountsOrderByWithRelationInput = {}
+    const prop = searchParams.get("prop")
+    if(prop){
+        let tmp:{ [key: string]: string } = {}
+        if(searchParams.get("order") === "descending"){
+            tmp[prop]= "desc"
+        }else{
+            tmp[prop]= "asc"
+        }
+        orderBy = tmp
+    }
+    try{
+        //查询计数
+        const total = await prisma.accounts.count({where:where})
+        if (!total){
+            res.data = {
+                list: [],
+                total: 0,
+                page: page,
+                pageSize: pageSize
+            }
+            return res
+        }
+        //查询数据
+        const list = await prisma.accounts.findMany({
+            skip:offset,
+            take:limit,
+            where:where,
+            orderBy:orderBy
+        })
         res.data = {
-            list: list.results,
-            total: total_result["total"],
+            list: list,
+            total: total,
             page: page,
             pageSize: pageSize
         }
-    }else{
-        res.error = list.error? list.error : '查询失败'
+    }catch(error:any){
+        res.error = error.message
     }
     return res
 }
 
-const findAccount = async(uuid:string, searchParams:URLSearchParams, env:Env)=>{
+const findAccount = async(uuid:string, searchParams:URLSearchParams, prisma: PrismaClient)=>{
     const res = new Result()
-    const id = searchParams.get("id")
+    const id = parseInt(searchParams.get("id")??'0')
     if (id){
-        const account = await env.DB.prepare("SELECT * FROM accounts WHERE uuid = ? AND id = ? LIMIT 1")
-        .bind(uuid, id)
-        .first()
+        try{
+            const account = await prisma.accounts.findFirst({
+                where:{
+                    uuid:uuid,
+                    id:id
+                }
+            })
+            if (account){
+                res.data = account
+            }else{
+                res.error = "查找账号失败"
+            }
+        }catch(error:any){
+            res.error = error.message
+        }
+    }else{
+        res.error = "没有提供账号的id"
+    }
+    return res
+}
+const deleteAccount = async(uuid:string, searchParams:URLSearchParams, prisma: PrismaClient)=>{
+    const res = new Result()
+    const id = parseInt(searchParams.get("id")??'0')
+    if (id){
+        try{
+            const result = await prisma.accounts.delete({
+                where:{
+                    uuid:uuid,
+                    id:id
+                }
+            })
+            if( result){
+                res.data = result
+            }else{
+                res.error = "删除账号失败"
+            }
+        }catch(error:any){
+            res.error = error.message
+        }
+    }else{
+        res.error = "没有提供账号的id"
+    }
+    return res
+}
+
+const deleteAccountByIds = async(uuid:string, searchParams:URLSearchParams, prisma: PrismaClient)=>{
+    const res = new Result()
+    const ids = searchParams.get("ids")?.split(",").filter(element=>!isNaN(parseInt(element))).map(element=>parseInt(element))??[]
+    if (ids.length>0){
+        try{
+            const result = await prisma.accounts.deleteMany({
+                where:{
+                    uuid:uuid,
+                    id:{
+                        in:ids
+                    }
+                }
+            })
+            if (result.count){
+                res.data = result
+            }else{
+                res.error = "删除账号失败"
+            }
+        }catch(error:any){
+            res.error = error.message
+        }
+    }else{
+        res.error="没有提供账号的id"
+    }
+    return res
+}
+
+const createAccount = async(uuid:string, data:any, prisma: PrismaClient)=>{
+    const res = new Result()
+    try{
+        const account = await prisma.accounts.create({
+            data:{
+                ...data,
+                uuid:uuid,
+                updated_at:new Date()
+            }
+        })
         if (account){
             res.data = account
         }else{
-            res.error = "查找账号失败"
+            res.error = "创建账号失败"
         }
-    }else{
-        res.error = "没有提供账号的id"
+    }catch(error:any){
+        res.error = error.message
     }
     return res
 }
-const deleteAccount = async(uuid:string, searchParams:URLSearchParams, env:Env)=>{
+
+const updateAccount = async(uuid:string, data:any, prisma: PrismaClient)=>{
     const res = new Result()
-    const id_param = searchParams.get("id")
-    const id = id_param?parseInt(id_param):0
+    const id = data['id']
     if (id){
-        const result = await env.DB.prepare("DELETE FROM accounts WHERE uuid=? AND id=?")
-            .bind(uuid, id)
-            .run()
-        if( result.success){
-            res.data = result.results
-        }else{
-            res.error = result.error? result.error:"删除账号失败"
-        }
-    }else{
-        res.error = "没有提供账号的id"
-    }
-    return res
-}
-
-const deleteAccountByIds = async(uuid:string, searchParams:URLSearchParams, env:Env)=>{
-    const res = new Result()
-    const ids:string[] = []
-    searchParams.forEach((value, key)=>{
-        if (key.startsWith("ids")){
-            ids.push(value)
-        }
-    })
-    if (ids.length>0){
-        const result = await env.DB.prepare("DELETE FROM accounts WHERE uuid=? AND id IN ("+ids.join(',')+")")
-            .bind(uuid)
-            .run()
-        if( result.success){
-            res.data = result.results
-        }else{
-            res.error = result.error? result.error:"删除账号失败"
+        try{
+            const account = await prisma.accounts.update({
+                where:{
+                    uuid:uuid,
+                    id:data['id']
+                },
+                data:{
+                    ...data,
+                    updated_at:new Date()
+                }
+            })
+            if (account){
+                res.data = account
+            }else{
+                res.error = "修改账号失败"
+            }
+        }catch(error:any){
+            res.error = error.message
         }
     }else{
         res.error="没有提供账号的id"
@@ -166,77 +239,29 @@ const deleteAccountByIds = async(uuid:string, searchParams:URLSearchParams, env:
     return res
 }
 
-const createAccount = async(uuid:string, data:any, env:Env)=>{
+const enableAccount = async(uuid:string, data:any, prisma: PrismaClient)=>{
     const res = new Result()
-    const result = await env.DB.prepare("INSERT INTO accounts (uuid, email, password, appcode, status, enable_status, access_token, coins, dr_level, stage_id, champions_points, transformarket_unlocked, record, updated_at)"+
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-        .bind(uuid,//在进入之前判断 
-            data["email"]??'',
-            data["password"]??'',
-            data["appcode"]??'',
-            data["status"]??0,
-            data["enable_status"]??0,
-            data["access_token"]??'',
-            data["coins"]??null,
-            data["dr_level"]??null,
-            data["stage_id"]??null,
-            data["champions_points"]??null,
-            data["transformarket_unlocked"]??null,
-            data["record"]??'',
-            get_updated_at())
-        .run()
-    if( result.success){
-        res.data = result.results
-    }else{
-        res.error = result.error? result.error:"新增账号失败"
-    }
-    return res
-}
-
-const updateAccount = async(uuid:string, data:any, env:Env)=>{
-    const res = new Result()
-    if(!data['id']){
-        res.error = "没有提供账号的id"
-        return res
-    }
-    const result = await env.DB.prepare("UPDATE accounts SET email=?, password=?, appcode=?, status=?, enable_status=?, access_token=?, coins=?, dr_level=?, stage_id=?, champions_points=?, transformarket_unlocked=?, record=?, updated_at=?"+
-        " WHERE uuid=? AND id=?")
-        .bind( 
-            data["email"]??'',
-            data["password"]??'',
-            data["appcode"]??'',
-            data["status"]??0,
-            data["enable_status"]??0,
-            data["access_token"]??'',
-            data["coins"]??null,
-            data["dr_level"]??null,
-            data["stage_id"]??null,
-            data["champions_points"]??null,
-            data["transformarket_unlocked"]??false,
-            data["record"]??'',
-            get_updated_at(),
-            uuid,
-            data['id']
-        )
-        .run()
-    if( result.success){
-        res.data = result.results
-    }else{
-        res.error = result.error? result.error:"修改账号失败"
-    }
-    return res
-}
-
-const enableAccount = async(uuid:string, data:any, env:Env)=>{
-    const res = new Result()
-    if (data.ids?.length>0){
-        const result = await env.DB.prepare("UPDATE accounts SET enable_status=?, updated_at=? WHERE uuid=? AND id IN ("+data.ids.join(',')+")")
-            .bind(data.status, get_updated_at(), uuid)
-            .run()
-        if( result.success){
-            res.data = result.results
-        }else{
-            res.error = result.error? result.error:"启用账号失败"
+    if (data.ids?.length>0&&!isNaN(data.enable_status)){
+        try{
+            const result = await prisma.accounts.updateMany({
+                where:{
+                    uuid:uuid,
+                    id:{
+                        in:data.ids
+                    }
+                },
+                data:{
+                    enable_status:data.enable_status,
+                    updated_at:new Date()
+                }
+            })
+            if (result.count){
+                res.data = result
+            }else{
+                res.error = "启动账号失败"
+            }
+        }catch(error:any){
+            res.error = error.message
         }
     }else{
         res.error="没有提供账号的id"
@@ -244,36 +269,230 @@ const enableAccount = async(uuid:string, data:any, env:Env)=>{
     return res
 }
 
-const importAccount = async(searchParams:URLSearchParams, formData:FormData, env:Env)=>{
+const importAccount = async(uuid:string, formData:FormData, prisma: PrismaClient)=>{
     const res = new Result()
-    const uuid = searchParams.get("uuid")
     if(uuid){
         const file = formData.get("file")
         if (file && typeof file !== "string" && file.type === 'text/plain'){
             const import_text =  await file.text()
-            const import_accounts = import_text.split(/\r\n|\n|\r/)
+            const updated_at = new Date()
+            const import_accounts:Prisma.AccountsCreateManyInput[] = import_text.split(/[\r\n]+/)
                 .map(line=>{
                     return line.split('----')
                 }).filter(account=>{
                     return account.length>=3
+                }).map((account):Prisma.AccountsCreateManyInput=>{
+                    return {
+                        uuid:uuid,
+                        email:account[0],
+                        password:account[1],
+                        appcode:account[2],
+                        updated_at:updated_at
+                    }
                 })
             if (import_accounts.length === 0){
                 res.error = "没有导入的账号"
                 return res
             }
-            const updated_at = get_updated_at()
-            const stmt = env.DB.prepare("INSERT INTO accounts(uuid, email, password, appcode, status, enable_status, updated_at) Values(?, ?, ?, ?, 0, 0, ?)")
-            res.data = await env.DB.batch(
-                import_accounts.map((account):D1PreparedStatement=>{
-                    return stmt.bind(uuid, account[0], account[1], account[2], updated_at)
-                }))
+            try{
+                const result = await prisma.accounts.createMany({
+                    data:import_accounts
+                })
+                if (result.count){
+                    res.data = result
+                }else{
+                    res.error = "导入账号失败"
+                }
+            }catch(error:any){
+                if (error.code === "P2002"){
+                    res.error = "存在重复账号"
+                }else{
+                    res.error = error.message
+                }
+            }
         }
     }else{
         res.error = "未登录"
     }
     return res
 }
-
+/**并发锁 */
+class Lock {
+    locked:boolean = false
+    constructor() {
+        this.locked = false;
+    }
+    acquire() {
+        if (!this.locked) {
+            this.locked = true;
+            return Promise.resolve();
+        } else {
+            return new Promise<void>(resolve => {
+                const unlock = () => {
+                    this.locked = false;
+                    resolve();
+                };
+                const interval = setInterval(() => {
+                    if (!this.locked) {
+                        clearInterval(interval);
+                        unlock();
+                    }
+                }, 100); // 每100毫秒检查一次
+            });
+        }
+    }
+    release() {
+        this.locked = false;
+    }
+}
+ 
+const lock = new Lock();
+ 
+/**获取未使用的账号 */
+const getUnusedAccount = async(uuid:string, prisma: PrismaClient)=>{
+    const res = new Result()
+    await lock.acquire()//加锁，
+    try{
+        let account = await prisma.accounts.findFirst({
+            where:{
+                uuid:uuid,
+                enable_status:{not: EnableStatus.NOT_ENABLE},
+                OR:[
+                    {status:AccountStatus.NOT_LOGGED},
+                    {status:null}
+                ]
+            }
+        })
+        if (account){
+            account.status = AccountStatus.LOGGING
+            account = await prisma.accounts.update({
+                where:{
+                    uuid:uuid,
+                    id:account.id
+                },
+                data:{
+                    ...account,
+                    updated_at:new Date()
+                }
+            })
+            if (account){
+                res.data = account
+            }else{
+                res.error = "获取账号失败"
+            }
+        }else{
+            res.error = "没有找到可用账号"
+        }
+    }catch(error:any){
+        res.error = error.message
+    }finally{
+        lock.release()//确保释放锁
+    }
+    return res
+}
+/**检查账号 */
+const checkAccount=async(uuid:string,account:any,prisma:PrismaClient)=>{
+    const res = new Result()
+    if(!account.id){
+        res.error = "账号信息异常"
+        account.enable_status = EnableStatus.NOT_ENABLE
+        res.data = account
+        return res
+    }
+    try{
+        //在数据库中查找该账号
+        let resAccount = await prisma.accounts.findFirst({
+            where:{
+                uuid:uuid,
+                id:account.id
+            }
+        })
+        if (resAccount){
+            //如果账号状态异常
+            if(resAccount.status !== AccountStatus.LOGGING&&resAccount.status!==AccountStatus.LOGGED){
+                resAccount.enable_status = EnableStatus.NOT_ENABLE
+                res.data = resAccount
+                res.error = "账号状态异常"
+                return res
+            }
+            //更新账号的启用状态
+            account.enable_status = resAccount.enable_status
+            resAccount = await prisma.accounts.update({
+                where:{
+                    uuid:uuid,
+                    id:account.id
+                },
+                data:{
+                    ...account,
+                    updated_at:new Date()
+                }
+            })
+            res.data = resAccount
+        }else{
+            account.enable_status = EnableStatus.NOT_ENABLE
+            res.data = account
+            res.error = "查找账号失败"
+        }
+    }catch(error:any){
+        account.enable_status = EnableStatus.NOT_ENABLE
+        res.data = account
+        res.error = error.message
+    }
+    return res
+}
+/**释放账号 */
+const releaseAccount=async(uuid:string,account:any,prisma:PrismaClient)=>{
+    const res = new Result()
+    if(!account.id){
+        res.error = "账号信息异常"
+        account.enable_status = EnableStatus.NOT_ENABLE
+        res.data = account
+        return res
+    }
+    try{
+        //在数据库中查找该账号
+        let resAccount = await prisma.accounts.findFirst({
+            where:{
+                uuid:uuid,
+                id:account.id
+            }
+        })
+        if (resAccount){
+            //如果账号状态异常
+            if(resAccount.status !== AccountStatus.LOGGING&&resAccount.status!==AccountStatus.LOGGED){
+                resAccount.enable_status = EnableStatus.NOT_ENABLE
+                res.data = resAccount
+                res.error = "账号状态异常"
+                return res
+            }
+            //更新账号的状态
+            account.enable_status = EnableStatus.NOT_ENABLE// 不启用被释放的账号
+            if(account.status === AccountStatus.LOGGING||account.status === AccountStatus.LOGGED){
+                account.status = AccountStatus.NOT_LOGGED// 退出登录
+            }
+            resAccount = await prisma.accounts.update({
+                where:{
+                    uuid:uuid,
+                    id:account.id
+                },
+                data:{
+                    ...account,
+                    updated_at:new Date()
+                }
+            })
+            res.data = resAccount
+        }else{
+            account.enable_status = EnableStatus.NOT_ENABLE
+            res.data = account
+            res.error = "查找账号失败"
+        }
+    }catch(error:any){
+        account.enable_status = EnableStatus.NOT_ENABLE
+        res.data = account
+        res.error = error.message
+    }
+    return res
+}
 export default {
     getAccountList,
     findAccount,
@@ -282,5 +501,9 @@ export default {
     deleteAccount,
     deleteAccountByIds,
     enableAccount,
-    importAccount
+    importAccount,
+
+    getUnusedAccount,
+    checkAccount,
+    releaseAccount
 }
